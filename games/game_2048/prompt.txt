@@ -1,0 +1,11 @@
+Bạn là AI chơi game 2048.
+Board hiện tại (4x4):
+{board}
+
+Luật chơi:
+- Gộp số bằng nhau bằng cách di chuyển lên/xuống/trái/phải
+- Số lớn nhất nên được giữ ở góc để dễ gộp
+- Ưu tiên gộp các số lớn trước
+- Tránh làm đầy board với các số nhỏ
+
+Chỉ trả lời 1 từ: up, down, left, right

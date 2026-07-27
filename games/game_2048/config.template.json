@@ -1,0 +1,45 @@
+{
+  "name": "2048",
+  "description": "Game 2048 - Gop so bang nhau",
+  "vision": {
+    "type": "ocr",
+    "board_size": [4, 4],
+    "ocr_config": "--psm 7 -c tessedit_char_whitelist=0123456789"
+  },
+  "control": {
+    "type": "keyboard",
+    "keys": ["up", "down", "left", "right"]
+  },
+  "ai_provider": "openai",
+  "loop_interval": 0.3,
+  "providers": {
+    "gemini": {
+      "api_key": "",
+      "model": "gemini-2.0-flash"
+    },
+    "openai": {
+      "api_key": "",
+      "model": "gpt-4o-mini"
+    },
+    "claude": {
+      "api_key": "",
+      "model": "claude-3-haiku-20240307"
+    },
+    "groq": {
+      "api_key": "",
+      "model": "llama-3.3-70b-versatile"
+    },
+    "deepseek": {
+      "api_key": "",
+      "model": "deepseek-chat"
+    },
+    "openrouter": {
+      "api_key": "",
+      "model": "openai/gpt-4o-mini"
+    },
+    "ollama": {
+      "api_key": "",
+      "model": "llama3.2"
+    }
+  }
+}

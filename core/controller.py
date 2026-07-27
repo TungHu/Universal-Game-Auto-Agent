@@ -1,15 +1,32 @@
 """
 controller.py - Dieu khien chuot va ban phim
-Dung pyautogui de mo phong thao tac nguoi dung
+Dung pynput (low-level input) de gui phim/click - hoat dong voi moi game
 """
 
-import pyautogui
 import time
-import sys
+from pynput.keyboard import Key, Controller as KeyController
+from pynput.mouse import Controller as MouseController
 
 
 class GameController:
-    """Dieu khien game bang chuot/phim"""
+    """Dieu khien game bang chuot/phim dung pynput (low-level)"""
+
+    # Map ten phim tu AI sang pynput Key
+    KEY_MAP = {
+        "up": Key.up,
+        "down": Key.down,
+        "left": Key.left,
+        "right": Key.right,
+        "enter": Key.enter,
+        "space": Key.space,
+        "esc": Key.esc,
+        "tab": Key.tab,
+        "shift": Key.shift,
+        "ctrl": Key.ctrl,
+        "alt": Key.alt,
+        "backspace": Key.backspace,
+        "delete": Key.delete,
+    }
 
     def __init__(self, config: dict):
         """
@@ -18,8 +35,10 @@ class GameController:
         """
         self.config = config
         self.control_type = config.get("control", {}).get("type", "keyboard")
-        pyautogui.PAUSE = 0.05  # Delay giua cac thao tac
-        print(f"  [CONTROLLER] Khoi tao: type={self.control_type}")
+        self.keyboard = KeyController()
+        self.mouse = MouseController()
+        self.region = config.get("_region", {})
+        print(f"  [CONTROLLER] Khoi tao: type={self.control_type} (pynput)")
 
     def act(self, action: str):
         """
@@ -45,34 +64,44 @@ class GameController:
             print(f"  [CONTROLLER] LOI: {e}")
 
     def _keyboard_action(self, action: str):
-        """Nhan phim theo huong dan AI"""
+        """Nhan phim bang pynput (low-level, hoat dong voi game)"""
         keys = self.config.get("control", {}).get("keys", [])
         print(f"  [CONTROLLER] Nhan phim: '{action}' (cho phep: {keys})")
 
-        try:
-            pyautogui.press(action)
-        except Exception as e:
-            print(f"  [CONTROLLER] Loi nhan phim: {e}")
-            raise
+        # Map action -> pynput Key
+        if action in self.KEY_MAP:
+            key = self.KEY_MAP[action]
+        else:
+            # Neu la phim thuong (a, b, c, w, ...), gui truc tiep
+            key = action
+
+        # Press & release bang pynput
+        self.keyboard.press(key)
+        time.sleep(0.05)
+        self.keyboard.release(key)
+        print(f"  [CONTROLLER] Da nhan phim '{action}'")
 
     def _mouse_action(self, action: str):
-        """Click chuot tai toa do"""
+        """Click chuot tai toa do bang pynput"""
         try:
             parts = action.strip().split(",")
             x, y = int(parts[0].strip()), int(parts[1].strip())
             print(f"  [CONTROLLER] Click chuot tai ({x}, {y})")
-            pyautogui.click(x, y)
+            self.mouse.position = (x, y)
+            time.sleep(0.05)
+            self.mouse.click()
         except (ValueError, IndexError):
             # Fallback: click vao vung game
-            region = self.config.get("_region", {})
-            if region:
-                cx = region["left"] + region["width"] // 2
-                cy = region["top"] + region["height"] // 2
+            if self.region:
+                cx = self.region["left"] + self.region["width"] // 2
+                cy = self.region["top"] + self.region["height"] // 2
                 print(f"  [CONTROLLER] Click vao tam vung game ({cx}, {cy})")
-                pyautogui.click(cx, cy)
+                self.mouse.position = (cx, cy)
+                time.sleep(0.05)
+                self.mouse.click()
 
     def _mouse_grid_action(self, action: str):
-        """Click vao o tren grid (vi du: "2,3" = hang 2, cot 3)"""
+        """Click vao o tren grid bang pynput (vi du: "2,3" = hang 2, cot 3)"""
         try:
             parts = action.strip().split(",")
             row, col = int(parts[0].strip()), int(parts[1].strip())
@@ -80,19 +109,20 @@ class GameController:
             print(f"  [CONTROLLER] Loi parse grid action: '{action}'")
             return
 
-        region = self.config.get("_region", {})
         control_cfg = self.config.get("control", {})
         grid_size = control_cfg.get("grid_size", [4, 4])
 
-        if not region:
+        if not self.region:
             print("  [CONTROLLER] Loi: khong co region")
             return
 
-        cell_w = region["width"] // grid_size[1]
-        cell_h = region["height"] // grid_size[0]
+        cell_w = self.region["width"] // grid_size[1]
+        cell_h = self.region["height"] // grid_size[0]
 
-        x = region["left"] + col * cell_w + cell_w // 2
-        y = region["top"] + row * cell_h + cell_h // 2
+        x = self.region["left"] + col * cell_w + cell_w // 2
+        y = self.region["top"] + row * cell_h + cell_h // 2
 
         print(f"  [CONTROLLER] Click grid ({row},{col}) -> man hinh ({x}, {y})")
-        pyautogui.click(x, y)
+        self.mouse.position = (x, y)
+        time.sleep(0.05)
+        self.mouse.click()

@@ -71,6 +71,8 @@ def main():
                         help="Region preset: fullscreen hoac path to region.json")
     parser.add_argument("--mock-ai", action="store_true",
                         help="Mock AI: khong goi API, tra ve ket qua gia (de test)")
+    parser.add_argument("--api-key", default=None,
+                        help="API key ghi de cho provider hien tai (khong luu vao file)")
 
     args = parser.parse_args()
 
@@ -357,6 +359,14 @@ def run_workflow(args):
         rt = region["top"]
         print(f"  Da chon: {rw}x{rh} tai ({rl}, {rt})")
 
+    # Validate region (luon thuc hien, ke ca doc tu file): width/height phai > 0
+    if (not region or not isinstance(region, dict)
+            or region.get("width", 0) <= 0 or region.get("height", 0) <= 0
+            or not all(k in region for k in ("left", "top", "width", "height"))):
+        print(f"  [FAIL] Region khong hop le (can left/top/width/height va width,height > 0): {region}")
+        print("  -> Chon lai vung (bo --no-region-prompt) hoac sua region.json")
+        sys.exit(1)
+
     # --- Khoi tao modules ---
     base_config = {
         "_region": region,
@@ -374,22 +384,46 @@ def run_workflow(args):
     # Merge workflow config
     base_config["steps"] = steps
     base_config["repeat"] = repeat
-    base_config.setdefault("ai", {})
-    base_config["ai"].setdefault("provider", args.provider or base_config.get("ai_provider", "gemini"))
-    base_config["ai"].setdefault("model", args.model or base_config.get("model", "gemini-2.0-flash"))
-    base_config["ai"].setdefault("min_interval", 1.0)
-    base_config["ai"].setdefault("find_timeout", 25.0)
-    base_config["ai"].setdefault("find_retry_interval", 2.0)
     base_config["image_dir"] = workflow_config.get("image_dir", "input_picture")
 
-    if args.provider:
-        base_config["ai_provider"] = args.provider
-    if args.model:
-        base_config["model"] = args.model
+    # --- Ghep ai theo thu tu uu tien thap -> cao ---
+    # 1) config.json (ai_provider/model)  2) steps.json ai block
+    # 3) CLI --provider/--model/--api-key (uu tien cao nhat, ghi de TRUC TIEP)
+    ai_cfg = dict(base_config.get("ai") or {})
+    for k, v in (workflow_config.get("ai") or {}).items():
+        ai_cfg.setdefault(k, v)
 
-    print(f"\n  [CFG] AI Provider: {base_config['ai']['provider']}")
-    val = base_config["ai"]["model"]
-    print(f"  [CFG] Model: {val}")
+    if args.provider:
+        ai_cfg["provider"] = args.provider
+    if args.model:
+        ai_cfg["model"] = args.model
+    elif args.provider:
+        # Provider doi -> lay model mac dinh cua provider do (config.json providers)
+        # de trong -> AIVision se chon VISION_DEFAULT_MODEL
+        ai_cfg["model"] = (base_config.get("providers") or {}).get(
+            args.provider, {}).get("model", "")
+
+    if args.api_key:
+        ai_cfg["api_key"] = args.api_key
+        prov_key = args.provider or ai_cfg.get("provider", "gemini")
+        base_config.setdefault("providers", {}).setdefault(prov_key, {})
+        base_config["providers"][prov_key]["api_key"] = args.api_key
+
+    ai_cfg.setdefault("provider", base_config.get("ai_provider", "gemini"))
+    ai_cfg.setdefault("model", base_config.get("model", ""))
+    ai_cfg.setdefault("min_interval", 1.0)
+    ai_cfg.setdefault("find_timeout", 25.0)
+    ai_cfg.setdefault("find_retry_interval", 2.0)
+    base_config["ai"] = ai_cfg
+
+    # Giu top-level cho brain/compat
+    base_config["ai_provider"] = ai_cfg["provider"]
+    base_config["model"] = ai_cfg["model"]
+
+    print(f"\n  [CFG] AI Provider: {ai_cfg['provider']}")
+    print(f"  [CFG] Model: {ai_cfg['model'] or '(mac dinh theo provider)'}")
+    if args.api_key:
+        print(f"  [CFG] API key: nhan tu --api-key")
     if args.mock_ai:
         print("  [CFG] MOCK AI: bat (khong goi API)")
     if args.dry_run:

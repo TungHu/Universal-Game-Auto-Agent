@@ -12,6 +12,17 @@ class AIConnectionError(Exception):
 
 class AIVision:
     VISION_PROVIDERS = {"gemini", "openai", "claude", "ollama"}
+    # Model mac dinh cho tung provider vision
+    VISION_DEFAULT_MODEL = {
+        "gemini": "gemini-2.0-flash",
+        "openai": "gpt-4o-mini",
+        "claude": "claude-3-haiku-20240307",
+        "ollama": "llama3.2-vision",
+    }
+    # Canh lon nhat cua anh gui cho AI (px). Anh se bi resize ve kich thuoc nay.
+    DEFAULT_MAX_SIZE = 720
+    # So lan thu lai khi goi API loi (mang chop, rate limit...)
+    DEFAULT_RETRY_ON_ERROR = 1
 
     def __init__(self, brain, config, region=None, debug=False, mock=False):
         self.brain = brain
@@ -26,23 +37,43 @@ class AIVision:
 
     def _get_ai_config(self):
         ai_cfg = self.config.get("ai", {})
+        provider = ai_cfg.get("provider", "gemini")
+        default_model = self.VISION_DEFAULT_MODEL.get(provider, "gemini-2.0-flash")
         return {
-            "provider": ai_cfg.get("provider", "gemini"),
-            "model": ai_cfg.get("model", "gemini-2.0-flash"),
+            "provider": provider,
+            "model": ai_cfg.get("model") or default_model,
             "min_interval": ai_cfg.get("min_interval", 1.0),
             "find_timeout": ai_cfg.get("find_timeout", 25.0),
             "find_retry": ai_cfg.get("find_retry_interval", 2.0),
+            "max_size": ai_cfg.get("max_size", self.DEFAULT_MAX_SIZE),
+            "retry_on_error": ai_cfg.get("retry_on_error", self.DEFAULT_RETRY_ON_ERROR),
         }
 
     def _check_vision_support(self, provider):
         if provider not in self.VISION_PROVIDERS:
             raise ValueError(f"Provider '{provider}' khong ho tro AI Vision. Chi ho tro: gemini, openai, claude, ollama")
 
-    def _pil_to_base64(self, img, max_size=720):
+    def _prepare_image(self, img, max_size=None):
+        """
+        Resize anh truoc khi gui cho AI.
+
+        Returns:
+            (anh_da_resize, ti_le) voi ti_le = kich_thuoc_sau / kich_thuoc_truoc
+
+        LUU Y: toa do AI tra ve tinh theo ANH DA RESIZE nay, nen phai chia
+        cho ti_le de quy doi ve pixel that cua vung man hinh.
+        """
+        if max_size is None:
+            max_size = self._get_ai_config()["max_size"]
         w, h = img.size
-        if max(w, h) > max_size:
+        if max_size and max(w, h) > max_size:
             scale = max_size / max(w, h)
-            img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+            new_size = (max(1, int(round(w * scale))), max(1, int(round(h * scale))))
+            return img.resize(new_size, Image.LANCZOS), scale
+        return img, 1.0
+
+    def _pil_to_base64(self, img):
+        """Encode PIL.Image -> base64 JPEG. Khong resize (da lam o _prepare_image)."""
         buffered = BytesIO()
         img.save(buffered, format="JPEG", quality=80)
         return base64.b64encode(buffered.getvalue()).decode("utf-8")
@@ -96,12 +127,21 @@ class AIVision:
         self.frame_hashes[step_index] = current_hash
         return True
 
+    def reset_frame_cache(self):
+        """Xoa cache frame. Phai goi o dau moi chu ky, neu khong chu ky sau se
+        tuong man hinh khong doi va bo qua luon buoc goi AI."""
+        self.frame_hashes.clear()
+
     def locate(self, reference_image, description, step_index=0, timeout=25.0, retry_interval=2.0, fallback_click=None, min_interval=1.0):
         ai_cfg = self._get_ai_config()
         provider = ai_cfg["provider"]
         self._check_vision_support(provider)
+        region = self.region if self.region else {"left": 0, "top": 0, "width": 1368, "height": 912}
+        region_left = region.get("left", 0)
+        region_top = region.get("top", 0)
         start_time = time.time()
         last_api_call = 0
+        error_count = 0
         attempt = 0
         prompt = self._build_locate_prompt(description)
         while time.time() - start_time < timeout:
@@ -109,44 +149,54 @@ class AIVision:
             try:
                 from core.capture import ScreenCapture
                 capture = ScreenCapture()
-                region = self.region if self.region else {"left": 0, "top": 0, "width": 1368, "height": 912}
                 screenshot = capture.capture_region(region)
             except Exception as e:
                 return {"found": False, "x": 0, "y": 0, "score": 0.0, "action": "none", "message": f"Loi chup man hinh: {e}"}
             if not self._frame_changed(step_index, screenshot):
-                elapsed = time.time() - start_time
-                remaining = timeout - elapsed
+                remaining = timeout - (time.time() - start_time)
                 if remaining > 0:
                     time.sleep(min(retry_interval, remaining))
                 continue
             now = time.time()
             if now - last_api_call < min_interval:
                 time.sleep(min_interval - (now - last_api_call))
-            grid_img = self._add_grid_overlay(screenshot.copy(), step_index)
-            ref_img = reference_image.copy()
+            # QUAN TRONG: ve luoi len CHINH anh da resize (anh ma AI nhin thay),
+            # roi chia toa do AI tra ve cho scale de ra pixel that cua vung.
+            grid_img, scale = self._prepare_image(screenshot.copy())
+            grid_img = self._add_grid_overlay(grid_img, step_index)
+            ref_img, _ = self._prepare_image(reference_image.copy())
             try:
                 if self.debug:
-                    debug_ref = os.path.join(self.debug_dir, f"step_{step_index:02d}_reference.jpg")
                     os.makedirs(self.debug_dir, exist_ok=True)
+                    debug_ref = os.path.join(self.debug_dir, f"step_{step_index:02d}_reference.jpg")
                     ref_img.save(debug_ref, "JPEG")
-                reply = self._call_ai_vision(prompt, ref_img, grid_img, provider)
+                reply = self._call_ai_vision(prompt, ref_img, grid_img, provider=provider)
                 last_api_call = time.time()
+                error_count = 0
                 if self.debug:
                     self.last_reply[step_index] = reply
                     debug_reply = os.path.join(self.debug_dir, f"step_{step_index:02d}_reply.txt")
                     with open(debug_reply, "w", encoding="utf-8") as f:
                         f.write(reply)
             except Exception as e:
-                return {"found": False, "x": 0, "y": 0, "score": 0.0, "action": "none", "message": f"Loi goi AI: {e}"}
+                error_count += 1
+                if error_count > ai_cfg["retry_on_error"]:
+                    return {"found": False, "x": 0, "y": 0, "score": 0.0, "action": "none",
+                            "message": f"Loi goi AI (thu {error_count} lan): {e}"}
+                print(f"      [WARN] Loi goi AI (thu {error_count}) -> thu lai: {e}")
+                remaining = timeout - (time.time() - start_time)
+                if remaining > 0:
+                    time.sleep(min(retry_interval, remaining))
+                continue
             result = self._parse_locate_response(reply, description)
             if result["found"]:
-                rx, ry = result["x"], result["y"]
-                region_left = self.region.get("left", 0)
-                region_top = self.region.get("top", 0)
+                rx = int(round(result["x"] / scale))
+                ry = int(round(result["y"] / scale))
                 result["relative_x"] = rx
                 result["relative_y"] = ry
                 result["x"] = region_left + rx
                 result["y"] = region_top + ry
+                result["scale"] = round(scale, 4)
                 if self.debug:
                     debug_marked = os.path.join(self.debug_dir, f"step_{step_index:02d}_found.jpg")
                     marked = screenshot.copy()
@@ -155,16 +205,13 @@ class AIVision:
                     draw.ellipse([rx - 4, ry - 4, rx + 4, ry + 4], outline="yellow", width=2)
                     marked.save(debug_marked, "JPEG")
                 return result
-            elapsed = time.time() - start_time
-            remaining = timeout - elapsed
+            remaining = timeout - (time.time() - start_time)
             if remaining > 0:
                 time.sleep(min(retry_interval, remaining))
         if fallback_click and "point" in fallback_click:
             px, py = fallback_click["point"]
-            region_left = self.region.get("left", 0)
-            region_top = self.region.get("top", 0)
-            rw = self.region.get("width", 1368)
-            rh = self.region.get("height", 912)
+            rw = region.get("width", 1368)
+            rh = region.get("height", 912)
             return {
                 "found": False,
                 "x": region_left + int(px * rw),
@@ -188,7 +235,9 @@ class AIVision:
         prompt = self._build_verify_prompt()
         provider = self._get_ai_config()["provider"]
         try:
-            reply = self._call_ai_vision(prompt, reference_image, screenshot, provider)
+            ref_img, _ = self._prepare_image(reference_image.copy())
+            cur_img, _ = self._prepare_image(screenshot.copy())
+            reply = self._call_ai_vision(prompt, ref_img, cur_img, provider=provider)
             if self.debug:
                 debug_dir = os.path.join(self.config.get("_game_dir", "."), "debug")
                 os.makedirs(debug_dir, exist_ok=True)
@@ -255,19 +304,55 @@ class AIVision:
             return '{"count": 2, "found": true, "message": "mock: 2 item"}'
         if '"found"' in low:
             region = self.region or {"left": 0, "top": 0, "width": 1368, "height": 912}
-            x = int(region.get("width", 1368) * 0.5)
-            y = int(region.get("height", 912) * 0.5)
+            rw = region.get("width", 1368)
+            rh = region.get("height", 912)
+            # Toa do phai tinh theo ANH DA RESIZE vi locate() se chia cho scale
+            max_size = self._get_ai_config()["max_size"]
+            scale = min(1.0, max_size / max(rw, rh)) if max_size else 1.0
+            x = int(rw * scale * 0.5)
+            y = int(rh * scale * 0.5)
             return ('{"found": true, "x": %d, "y": %d, "action": "click", '
                     '"confidence": 0.9, "message": "mock"}' % (x, y))
         return '{"found": false, "action": "wait", "message": "mock unknown prompt"}'
 
+    def _get_api_key(self, provider):
+        """Lay API key cho DUNG provider vision (khong phu thuoc brain).
+        Uu tien: config['ai']['api_key'] (CLI --api-key) -> providers[provider].api_key
+        -> bien moi truong -> brain."""
+        ai_key = (self.config.get("ai") or {}).get("api_key", "")
+        if ai_key:
+            return ai_key
+        prov_cfg = (self.config.get("providers") or {}).get(provider) or {}
+        api_key = prov_cfg.get("api_key", "") or prov_cfg.get("apiKey", "")
+        if api_key:
+            return api_key
+        env_map = {
+            "gemini": "GEMINI_API_KEY",
+            "openai": "OPENAI_API_KEY",
+            "claude": "ANTHROPIC_API_KEY",
+        }
+        env_var = env_map.get(provider, "")
+        if env_var:
+            api_key = os.environ.get(env_var, "")
+        if api_key:
+            return api_key
+        if self.brain is not None:
+            try:
+                return self.brain._get_provider_config().get("api_key", "") or ""
+            except Exception:
+                return ""
+        return ""
+
     def _call_gemini_vision(self, prompt, *images):
         from google import genai
         ai_cfg = self._get_ai_config()
-        api_key = self.brain._get_provider_config()["api_key"]
-        model = ai_cfg["model"] or "gemini-2.0-flash"
+        api_key = self._get_api_key("gemini")
+        model = ai_cfg["model"] or self.VISION_DEFAULT_MODEL["gemini"]
         if not api_key:
-            raise AIConnectionError("Gemini API key not found.")
+            raise AIConnectionError(
+                "Gemini API key not found. Dat providers.gemini.api_key trong config.json "
+                "hoac bien moi truong GEMINI_API_KEY"
+            )
         client = genai.Client(api_key=api_key)
         contents = [prompt]
         for img in images:
@@ -279,17 +364,20 @@ class AIVision:
         from openai import OpenAI
         import httpx
         ai_cfg = self._get_ai_config()
-        prov_cfg = self.brain._get_provider_config()
-        api_key = prov_cfg["api_key"]
+        provider = ai_cfg["provider"]
+        api_key = self._get_api_key(provider)
         if not api_key:
-            raise AIConnectionError(f"{self.brain.provider.title()} API key not found.")
-        if self.brain.provider == "openai":
-            base_url = "https://api.openai.com/v1"
-        elif self.brain.provider == "claude":
-            base_url = "https://api.anthropic.com/v1"
+            raise AIConnectionError(
+                f"{provider.title()} API key not found. Dat providers.{provider}.api_key "
+                f"trong config.json hoac bien moi truong tuong ung"
+            )
+        if provider == "openai":
+            base_url = self.config.get("openai_url", "https://api.openai.com/v1")
+        elif provider == "claude":
+            base_url = self.config.get("claude_url", "https://api.anthropic.com/v1")
         else:
             base_url = self.config.get("api_url", "https://api.openai.com/v1")
-        model = ai_cfg["model"] or "gpt-4o-mini"
+        model = ai_cfg["model"] or self.VISION_DEFAULT_MODEL.get(provider, "gpt-4o-mini")
         client = OpenAI(base_url=base_url, api_key=api_key, http_client=httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0)))
         content = [{"type": "text", "text": prompt}]
         for img in images:
@@ -303,7 +391,7 @@ class AIVision:
         import httpx
         ai_cfg = self._get_ai_config()
         base_url = self.config.get("ollama_url", "http://localhost:11434/v1")
-        model = ai_cfg["model"] or "llama3.2-vision"
+        model = ai_cfg["model"] or self.VISION_DEFAULT_MODEL["ollama"]
         client = OpenAI(base_url=base_url, api_key="ollama", http_client=httpx.Client(timeout=httpx.Timeout(60.0, connect=5.0)))
         content = [{"type": "text", "text": prompt}]
         for img in images:
@@ -393,7 +481,7 @@ class AIVision:
             screenshot = capture.capture_region(region)
         except Exception as e:
             return {"count": 0, "found": False, "message": f"Loi chup: {e}"}
-        grid_img = self._add_grid_overlay(screenshot.copy(), step_index)
+        grid_img = self._add_grid_overlay(self._prepare_image(screenshot.copy())[0], step_index)
         try:
             reply = self._call_ai_vision(prompt, grid_img)
         except Exception as e:

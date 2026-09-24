@@ -61,6 +61,10 @@ class WorkflowRunner:
             cycle += 1
             self.cycle_count = cycle
             print(f"\n--- Chu ky {cycle} ---")
+            # Bug B: xoa cache frame truoc moi chu ky, neu khong chu ky 2+
+            # cung man hinh se bi bo qua goi AI -> timeout
+            if hasattr(self.vision, "reset_frame_cache"):
+                self.vision.reset_frame_cache()
             ok = 0
             fail = 0
             for idx, step in enumerate(self.steps, 1):
@@ -102,8 +106,10 @@ class WorkflowRunner:
         description = step.get("description", "")
         if not image_name:
             return {"ok": False, "message": "Missing image in step"}
-        timeout = step.get("timeout", self.vision._get_ai_config().get("find_timeout", 25.0))
-        retry_interval = step.get("retry_interval", self.vision._get_ai_config().get("find_retry", 2.0))
+        ai_cfg = self.vision._get_ai_config()
+        timeout = step.get("timeout", ai_cfg.get("find_timeout", 25.0))
+        retry_interval = step.get("retry_interval", ai_cfg.get("find_retry", 2.0))
+        min_interval = ai_cfg.get("min_interval", 1.0)
         fallback_click = step.get("fallback_click")
         reference = self._load_reference(image_name)
         result = self.vision.locate(
@@ -113,17 +119,20 @@ class WorkflowRunner:
             timeout=timeout,
             retry_interval=retry_interval,
             fallback_click=fallback_click,
+            min_interval=min_interval,
         )
-        if result["found"]:
+        # Fallback tra found=False nhung van co toa do -> PHAI click, khong thi
+        # fallback_click trong steps.json tro thanh vo nghia
+        if result.get("found") or result.get("action") == "fallback_click":
+            if not result.get("found"):
+                print(f"      [FALLBACK] {result.get('message', 'dung fallback_click')}")
             if not self.dry_run:
                 self.controller.click_at(result["x"], result["y"])
             else:
-                rx = result["x"]
-                ry = result["y"]
-                print(f"      [DRY-RUN] CLICK ({rx}, {ry})")
+                print(f"      [DRY-RUN] CLICK ({result['x']}, {result['y']})")
             return {"ok": True, "result": result}
-        else:
-            return {"ok": False, "message": result.get("message", "not found"), "optional": step.get("optional", False)}
+        return {"ok": False, "message": result.get("message", "not found"),
+                "optional": step.get("optional", False)}
 
     def _run_random_pick(self, step, step_index):
         action_cfg = step.get("action", {})

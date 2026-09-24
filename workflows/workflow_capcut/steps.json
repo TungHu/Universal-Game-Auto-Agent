@@ -51,11 +51,23 @@
       "image": "4.jpg",
       "description": "Khi du 2 clip, nut Next goc phai duoi chuyen VANG. Bam nut Next.",
       "timeout": 25.0,
+      "fallback_click": {
+        "point": [
+          0.86,
+          0.85
+        ]
+      },
       "wait_after": 4.0
     },
     {
       "image": "5.jpg",
       "description": "Man hinh editor video. Bam mui ten export MAU VANG goc phai tren.",
+      "fallback_click": {
+        "point": [
+          0.88,
+          0.06
+        ]
+      },
       "wait_after": 3.0
     },
     {
@@ -67,6 +79,12 @@
       "image": "7.jpg",
       "description": "Dialog Exported. Bam nut CANCEL.",
       "timeout": 25.0,
+      "fallback_click": {
+        "point": [
+          0.5,
+          0.82
+        ]
+      },
       "wait_after": 2.0
     },
     {

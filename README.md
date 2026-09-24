@@ -203,4 +203,128 @@ Lay API key mien phi tu cac dich vu sau:
 - `config.json` chua API keys -> **da them vao .gitignore**
 - `config.template.json` la file mau -> **commit len GitHub**
 - De them game moi, chi can tao thu muc `games/game_xxx/` + `config.json` + `prompt.txt`
-- `controller.py` dang trong qua trinh debug
+- `controller.py` da ho tro click toa do / phim / hotkey / scroll / type (pynput)
+
+## Workflows
+
+Workflow mode cho phep tu dong hoa cac tac vu phuc tap (CapCut, browser, ...).
+
+### Cau truc workflow
+
+```
+workflows/
+  workflow_capcut/
+    steps.json        <- Danh sach buoc
+    config.json       <- API keys (gitignore)
+    config.template.json <- Mau config (commit)
+    region.json       <- Vung man hinh (tu workflow selector)
+```
+
+### Chay workflow
+
+```bash
+# Liet ke workflows
+python play.py --list
+
+# Chay CapCut workflow (tu dong chon vung man hinh o buoc dau)
+python play.py --workflow capcut
+
+# Dry run (khong click, chi in hanh dong)
+python play.py --workflow capcut --dry-run
+
+# Lap 3 lan
+python play.py --workflow capcut --repeat 3
+
+# Debug AI (luu anh + replies)
+python play.py --workflow capcut --debug-ai
+
+# Khong hoi chon vung, dung region.json cu
+python play.py --workflow capcut --no-region-prompt
+
+# Chon lai vung
+python play.py --workflow capcut --select-region
+
+# Dung toan man hinh lam vung (khong hien GUI chon)
+python play.py --workflow capcut --region fullscreen
+
+# Dung region tu 1 file json bat ki
+python play.py --workflow capcut --region workflows/workflow_capcut/region.json
+
+# TEST khong can API key: AI gia + khong click that
+python play.py --workflow capcut --mock-ai --dry-run --repeat 1
+```
+
+### Anh mau (reference images)
+
+Workflow doc anh mau trong `input_picture/` (cau hinh bang `image_dir` trong `steps.json`).
+Vi du: `input_picture/1.jpg` .. `input_picture/7.jpg` tuong ung 7 man hinh CapCut.
+Anh mau la anh chup man hinh dien thoai 720x1600, nen hay chon vung game /
+cua so scrcpy co ti le tuong ung de toa do AI tra ve chinh xac.
+
+### Test khong can API key
+
+| Flag | Tac dung |
+|---|---|
+| `--mock-ai` | Khong goi API, AI tra ve JSON gia (found=true, same=true, count=2) |
+| `--dry-run` | Khong click / khong nhan phim that, chi in ra man hinh |
+| `--repeat N` | Chay dung N chu ky roi thoat (0 = vo han) |
+
+### Buoc dau tien: chon vung man hinh
+
+Khi chay workflow, buoc dau tien la chon vung man hinh:
+- Keo chuot chon vung emulator/app
+- **R** = dung lai vung da luu lan truoc
+- **Enter** = xac nhan
+- **Esc** = huy
+
+Vung duoc luu vao `workflows/workflow_capcut/region.json`.
+
+### Cac loai action trong steps.json
+
+| action.type | Mo ta |
+|---|---|
+| `ai` (mac dinh) | AI vision tim & click theo mo ta |
+| `random_pick` | Chon ngau nhien N item trong grid, tu cuon, chong trung |
+| `back_until` | Nhan Back lap cho den khi thay lai anh mau |
+| `key` / `hotkey` / `type` | Nhan phim / to hop / go ch |
+| `scroll` | Cuon chuot |
+| `wait` | Cho N giay |
+| `check` | Chi xac nhan khong click |
+
+#### random_pick
+
+```json
+{
+  "action": {
+    "type": "random_pick",
+    "count": 2,
+    "cols": 3, "rows": 3,
+    "grid": [0.01, 0.20, 0.99, 0.68],
+    "avoid_repeat": true,
+    "verify_count": true,
+    "scroll": { "enabled": true, "times": [1, 3], "amount": [300, 800] }
+  }
+}
+```
+
+| Key | Y nghia |
+|---|---|
+| `count` | So item can chon |
+| `cols` / `rows` | Chia vung luoi anh thanh bao nhieu cot / dong |
+| `grid` | Vung luoi theo ti le vung game `[left, top, right, bottom]` (0.0 - 1.0) |
+| `avoid_repeat` | Bo qua o da chon o lan truoc (luu trong `used_photos.json`) |
+| `verify_count` | Nho AI dem lai so item da chon (chi canh bao, khong fail) |
+| `scroll` | Khi het o trong thi cuon them de load anh moi |
+
+`used_photos.json` luu fingerprint (MD5) cua tung o da click. Khi het anh moi,
+workflow se cuon toi da 3 lan, sau do cho phep dung lai anh cu de khong bi ket.
+
+### Providers ho tro AI Vision
+
+Chi nhung provider nao ho tro multimodal (xem anh):
+- **Gemini** (`gemini-2.0-flash`)
+- **OpenAI** (`gpt-4o-mini`, `gpt-4o`)
+- **Claude** (`claude-3-haiku-20240307`)
+- **Ollama** (`llama3.2-vision`)
+
+Groq, DeepSeek, OpenRouter chi ho tro text -> khong dung duoc voi workflow.

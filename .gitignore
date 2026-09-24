@@ -24,3 +24,8 @@ games/*/config.json
 games/*/region.json
 test_output.log
 *.log
+# Workflow
+workflows/*/config.json
+workflows/*/region.json
+workflows/*/used_photos.json
+workflows/*/debug/

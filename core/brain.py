@@ -211,3 +211,112 @@ class BaseBrain:
                     f"  -> Va khoi dong: ollama serve"
                 )
             raise
+
+    def generate_with_images(self, images, prompt):
+        """
+        Gui prompt kem nhieu anh cho AI (multimodal)
+
+        Args:
+            images: list cua PIL.Image hoac base64 strings
+            prompt: cau hoi cho AI
+
+        Returns:
+            str: cau tra loi cua AI
+        """
+        provider = self.provider
+        if provider == "gemini":
+            return self._think_gemini_with_images(images, prompt)
+        elif provider in ("openai", "claude"):
+            return self._think_openai_with_images(images, prompt)
+        elif provider == "ollama":
+            return self._think_ollama_with_images(images, prompt)
+        else:
+            raise ValueError(f"Provider '{provider}' khong ho tro vision. Dung gemini/openai/claude/ollama")
+
+    def _think_gemini_with_images(self, images, prompt):
+        from google import genai
+        prov_cfg = self._get_provider_config()
+        api_key = prov_cfg["api_key"]
+        if not api_key:
+            raise AIConnectionError("Gemini API key not found.")
+        model = prov_cfg["model"] or "gemini-2.0-flash"
+        client = genai.Client(api_key=api_key)
+        contents = [prompt]
+        for img in images:
+            if isinstance(img, str):
+                import base64
+                from io import BytesIO
+                from PIL import Image
+                data = base64.b64decode(img)
+                pil_img = Image.open(BytesIO(data))
+                contents.append(pil_img)
+            else:
+                contents.append(img)
+        response = client.models.generate_content(model=model, contents=contents)
+        return response.text.strip()
+
+    def _think_openai_with_images(self, images, prompt):
+        from openai import OpenAI
+        import httpx
+        prov_cfg = self._get_provider_config()
+        api_key = prov_cfg["api_key"]
+        if not api_key:
+            raise AIConnectionError(f"{self.provider.title()} API key not found.")
+        if self.provider == "openai":
+            base_url = "https://api.openai.com/v1"
+        elif self.provider == "claude":
+            base_url = "https://api.anthropic.com/v1"
+        else:
+            base_url = self.config.get("api_url", "https://api.openai.com/v1")
+        model = prov_cfg["model"] or "gpt-4o-mini"
+        client = OpenAI(
+            base_url=base_url,
+            api_key=api_key,
+            http_client=httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0)),
+        )
+        content = [{"type": "text", "text": prompt}]
+        for img in images:
+            if isinstance(img, str):
+                b64 = img
+            else:
+                import base64
+                from io import BytesIO
+                buffered = BytesIO()
+                img.save(buffered, format="JPEG", quality=80)
+                b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+            content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": content}],
+            max_tokens=200,
+        )
+        return response.choices[0].message.content.strip()
+
+    def _think_ollama_with_images(self, images, prompt):
+        from openai import OpenAI
+        import httpx
+        prov_cfg = self._get_provider_config()
+        base_url = self.config.get("ollama_url", "http://localhost:11434/v1")
+        model = prov_cfg["model"] or "llama3.2-vision"
+        client = OpenAI(
+            base_url=base_url,
+            api_key="ollama",
+            http_client=httpx.Client(timeout=httpx.Timeout(60.0, connect=5.0)),
+        )
+        content = [{"type": "text", "text": prompt}]
+        for img in images:
+            if isinstance(img, str):
+                b64 = img
+            else:
+                import base64
+                from io import BytesIO
+                buffered = BytesIO()
+                img.save(buffered, format="JPEG", quality=80)
+                b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+            content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": content}],
+            max_tokens=200,
+        )
+        return response.choices[0].message.content.strip()

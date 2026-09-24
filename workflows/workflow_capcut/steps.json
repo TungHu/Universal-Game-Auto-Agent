@@ -1,0 +1,89 @@
+{
+  "name": "capcut_auto",
+  "image_dir": "input_picture",
+  "repeat": 0,
+  "ai": {
+    "provider": "gemini",
+    "model": "gemini-2.0-flash",
+    "min_interval": 1.0,
+    "find_timeout": 25.0,
+    "find_retry_interval": 2.0
+  },
+  "steps": [
+    {
+      "image": "1.jpg",
+      "description": "Man hinh chinh AI Creation. Bam vao tile Engine Speed Lyrics (ben phai, hang 2).",
+      "wait_after": 3.0
+    },
+    {
+      "image": "2.jpg",
+      "description": "Trang chi tiet template. Bam nut trang Use This Theme o giua man hinh.",
+      "wait_after": 4.0
+    },
+    {
+      "image": "3.jpg",
+      "description": "Trinh chon anh Album. Bam tab Photos (ngay duoi All/Videos).",
+      "wait_after": 2.0
+    },
+    {
+      "image": "4.jpg",
+      "description": "Chon ngau nhien 2 anh bat ki trong luoi anh (co the cuon).",
+      "action": {
+        "type": "random_pick",
+        "count": 2,
+        "scroll": {
+          "enabled": true,
+          "times": [
+            1,
+            3
+          ],
+          "amount": [
+            300,
+            800
+          ]
+        },
+        "avoid_repeat": true,
+        "verify_count": true
+      },
+      "wait_after": 1.5
+    },
+    {
+      "image": "4.jpg",
+      "description": "Khi du 2 clip, nut Next goc phai duoi chuyen VANG. Bam nut Next.",
+      "timeout": 25.0,
+      "wait_after": 4.0
+    },
+    {
+      "image": "5.jpg",
+      "description": "Man hinh editor video. Bam mui ten export MAU VANG goc phai tren.",
+      "wait_after": 3.0
+    },
+    {
+      "image": "6.jpg",
+      "description": "Sheet Save Video tu duoi hien len. Bam nut vang Export to Phone.",
+      "wait_after": 5.0
+    },
+    {
+      "image": "7.jpg",
+      "description": "Dialog Exported. Bam nut CANCEL.",
+      "timeout": 25.0,
+      "wait_after": 2.0
+    },
+    {
+      "image": "1.jpg",
+      "description": "Nhan Back cho den khi giao dien tro ve dung man hinh trong anh mau nay.",
+      "action": {
+        "type": "back_until",
+        "max_presses": 8,
+        "wait_after_each": 1.5,
+        "back": {
+          "type": "click_pct",
+          "point": [
+            0.771,
+            0.972
+          ]
+        }
+      }
+    }
+  ]
+}

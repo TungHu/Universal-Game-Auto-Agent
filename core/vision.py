@@ -41,7 +41,7 @@ class GameVision:
             raise ValueError(f"Unknown vision type: {self.vision_type}")
 
     def _ocr_analysis(self, game_image: Image.Image) -> str:
-        """Nhận diện board game bằng OCR"""
+        """Nhận diện board game bằng OCR - đơn giản, scale ảnh lên 2x"""
         try:
             import pytesseract
         except ImportError:
@@ -55,6 +55,14 @@ class GameVision:
         ocr_config = vision_cfg.get("ocr_config", "--psm 7")
 
         rows, cols = board_size
+
+        # Scale ảnh lên 2x để OCR đọc số nhỏ tốt hơn
+        scale = 2
+        game_image = game_image.resize(
+            (game_image.width * scale, game_image.height * scale),
+            Image.LANCZOS
+        )
+
         cell_w = game_image.width // cols
         cell_h = game_image.height // rows
 
@@ -69,11 +77,23 @@ class GameVision:
                 bottom = top + cell_h
                 cell_img = game_image.crop((left, top, right, bottom))
 
-                # OCR từng ô
+                # OCR trực tiếp (không threshold)
                 text = pytesseract.image_to_string(cell_img, config=ocr_config).strip()
-                if text == "" or not text.isdigit():
-                    text = "0"
-                row.append(text)
+                digits_only = "".join(ch for ch in text if ch.isdigit())
+
+                # Fallback: nếu OCR fail, scale 4x và thử lại
+                if digits_only == "":
+                    cell_4x = cell_img.resize(
+                        (cell_img.width * 2, cell_img.height * 2),
+                        Image.LANCZOS
+                    )
+                    text2 = pytesseract.image_to_string(cell_4x, config=ocr_config).strip()
+                    digits_only = "".join(ch for ch in text2 if ch.isdigit())
+
+                if digits_only == "":
+                    digits_only = "0"
+
+                row.append(digits_only)
             board.append(row)
 
         # Chuyển thành text board

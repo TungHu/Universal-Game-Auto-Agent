@@ -2,7 +2,7 @@
 
 import time
 from pynput.keyboard import Key, Controller as KeyController
-from pynput.mouse import Controller as MouseController
+from pynput.mouse import Controller as MouseController, Button
 
 
 class GameController:
@@ -56,7 +56,7 @@ class GameController:
             return
         self.mouse.position = (x, y)
         time.sleep(0.05)
-        self.mouse.click()
+        self.mouse.click(Button.left)
 
     def _mouse_grid_action(self, action):
         parts = action.strip().split(",")
@@ -73,7 +73,7 @@ class GameController:
         y = self.region["top"] + row * cell_h + cell_h // 2
         self.mouse.position = (x, y)
         time.sleep(0.05)
-        self.mouse.click()
+        self.mouse.click(Button.left)
 
     def _generic_action(self, action):
         parts = action.strip().split(",")
@@ -93,7 +93,7 @@ class GameController:
             y = region.get("top", 0) + y
         self.mouse.position = (x, y)
         time.sleep(0.05)
-        self.mouse.click()
+        self.mouse.click(Button.left)
 
     def move_to(self, x, y, region=None):
         if region:

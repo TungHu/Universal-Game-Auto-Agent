@@ -1,3 +1,4 @@
+
 """workflow.py - Workflow runner for automated tasks"""
 
 import os, json, time, hashlib, random
@@ -34,9 +35,16 @@ class WorkflowRunner:
     def _get_image_path(self, image_name):
         image_dir = self.config.get("image_dir", "input_picture")
         if os.path.isabs(image_dir):
-            return os.path.join(image_dir, image_name)
-        base = self.config.get("_base_dir", os.path.dirname(os.path.abspath(__file__)))
-        return os.path.join(base, image_dir, image_name)
+            path = os.path.join(image_dir, image_name)
+        else:
+            base = self.config.get("_base_dir", os.path.dirname(os.path.abspath(__file__)))
+            path = os.path.join(base, image_dir, image_name)
+        # Ten khong co extension (vi du "1", "1x") -> tu tim file hinh
+        if not os.path.splitext(path)[1]:
+            for ext in (".png", ".jpg", ".jpeg", ".webp"):
+                if os.path.exists(path + ext):
+                    return path + ext
+        return path
 
     def _load_reference(self, image_name):
         path = self._get_image_path(image_name)
@@ -81,8 +89,16 @@ class WorkflowRunner:
                         print(f"      SKIP (optional): {msg}")
                     else:
                         print(f"      FAIL: {msg}")
+                # Bo delay khi buoc truoc da phat hien + click xong (co template)
+                # va buoc sau cung co template -> buoc sau se tu poll den khi thay
                 wait = step.get("wait_after", 0)
+                # Buoc co force_wait=true -> van giu delay du buoc sau co template
+                if wait and step.get("template") and not step.get("force_wait"):
+                    nxt = self.steps[idx] if idx < total else None
+                    if nxt and nxt.get("template"):
+                        wait = 0
                 if wait:
+                    print(f"      Cho {wait:g} giay truoc buoc tiep theo...")
                     time.sleep(wait)
             print(f"--- Chu ky {cycle} xong: OK {ok}/{total}, FAIL {fail}/{total} ---")
             if not repeat_mode and cycle >= self.repeat:
@@ -102,34 +118,57 @@ class WorkflowRunner:
             return {"ok": False, "message": f"Unknown action type: {action_type}"}
 
     def _run_ai_step(self, step, step_index):
-        image_name = step.get("image")
         description = step.get("description", "")
-        if not image_name:
-            return {"ok": False, "message": "Missing image in step"}
-        ai_cfg = self.vision._get_ai_config()
-        timeout = step.get("timeout", ai_cfg.get("find_timeout", 25.0))
-        retry_interval = step.get("retry_interval", ai_cfg.get("find_retry", 2.0))
-        min_interval = ai_cfg.get("min_interval", 1.0)
+        template_name = step.get("template")
+        image_name = step.get("image")
+        if not template_name and not image_name:
+            return {"ok": False, "message": "Missing image/template in step"}
         fallback_click = step.get("fallback_click")
-        reference = self._load_reference(image_name)
-        result = self.vision.locate(
-            reference_image=reference,
-            description=description,
-            step_index=step_index,
-            timeout=timeout,
-            retry_interval=retry_interval,
-            fallback_click=fallback_click,
-            min_interval=min_interval,
-        )
+        if template_name:
+            # Template matching cuc bo - KHONG goi API
+            timeout = step.get("timeout", 25.0)
+            retry_interval = step.get("retry_interval", 1.0)
+            threshold = step.get("threshold", 0.75)
+            reference = self._load_reference(template_name)
+            result = self.vision.locate_template(
+                reference,
+                description=description,
+                step_index=step_index,
+                timeout=timeout,
+                retry_interval=retry_interval,
+                threshold=threshold,
+                fallback_click=fallback_click,
+            )
+        else:
+            ai_cfg = self.vision._get_ai_config()
+            timeout = step.get("timeout", ai_cfg.get("find_timeout", 25.0))
+            retry_interval = step.get("retry_interval", ai_cfg.get("find_retry", 2.0))
+            min_interval = ai_cfg.get("min_interval", 1.0)
+            reference = self._load_reference(image_name)
+            result = self.vision.locate(
+                reference_image=reference,
+                description=description,
+                step_index=step_index,
+                timeout=timeout,
+                retry_interval=retry_interval,
+                fallback_click=fallback_click,
+                min_interval=min_interval,
+            )
         # Fallback tra found=False nhung van co toa do -> PHAI click, khong thi
         # fallback_click trong steps.json tro thanh vo nghia
         if result.get("found") or result.get("action") == "fallback_click":
             if not result.get("found"):
                 print(f"      [FALLBACK] {result.get('message', 'dung fallback_click')}")
-            if not self.dry_run:
-                self.controller.click_at(result["x"], result["y"])
-            else:
-                print(f"      [DRY-RUN] CLICK ({result['x']}, {result['y']})")
+            elif result.get("score") is not None:
+                print(f"      match score: {result.get('score')}")
+            try:
+                if not self.dry_run:
+                    self.controller.click_at(result["x"], result["y"])
+                else:
+                    print(f"      [DRY-RUN] CLICK ({result['x']}, {result['y']})")
+            except Exception as e:
+                return {"ok": False, "message": f"Loi click: {e}",
+                        "optional": step.get("optional", False)}
             return {"ok": True, "result": result}
         return {"ok": False, "message": result.get("message", "not found"),
                 "optional": step.get("optional", False)}
@@ -163,12 +202,20 @@ class WorkflowRunner:
         max_scroll_rounds = 3
         attempts = 0
         max_attempts = max(count * 10, 20)
+        skip_used_count = 0
 
         while len(picks) < count and attempts < max_attempts:
             attempts += 1
             free_cells = [(c, r) for c in range(cols) for r in range(rows)
                           if (c, r) not in picked_cells]
             if not free_cells:
+                if avoid_repeat and self._all_used(skip_used_count, cols, rows):
+                    # Tat ca o deu da dung -> dung lai anh cu ngay, khong cuon nua
+                    print("      Tat ca o da dung o lan truoc -> cho phep dung lai anh cu")
+                    avoid_repeat = False
+                    skip_used_count = 0
+                    picked_cells.clear()
+                    continue
                 if scroll_enabled and scroll_rounds < max_scroll_rounds:
                     scroll_rounds += 1
                     print(f"      Het o trong -> cuon lan {scroll_rounds}")
@@ -186,13 +233,23 @@ class WorkflowRunner:
 
             fp = self._cell_fingerprint(cx, cy, cell_w, cell_h)
             if avoid_repeat and fp and fp in used:
+                skip_used_count += 1
                 print(f"      Bo qua o ({col},{row}) - da dung o lan truoc")
+                if skip_used_count >= cols * rows:
+                    # Vuot qua toan bo luoi ma van khong chon duoc -> dung lai anh cu ngay
+                    print("      Tat ca o da dung o lan truoc -> cho phep dung lai anh cu")
+                    avoid_repeat = False
+                    skip_used_count = 0
+                    picked_cells.clear()
                 continue
 
             if self.dry_run:
                 print(f"      [DRY-RUN] CLICK o ({col},{row}) -> ({cx}, {cy})")
             else:
-                self.controller.click_at(cx, cy)
+                try:
+                    self.controller.click_at(cx, cy)
+                except Exception as e:
+                    return {"ok": False, "message": f"Loi click o ({col},{row}): {e}"}
             picks.append({"col": col, "row": row, "x": cx, "y": cy, "fingerprint": fp})
             if fp:
                 used.add(fp)
@@ -202,17 +259,29 @@ class WorkflowRunner:
             return {"ok": False, "message": f"Chi chon duoc {len(picks)}/{count} anh"}
 
         if verify_count:
-            check = self.vision.count_selected_items(
-                step.get("description", "anh da chon"), count, step_index
-            )
-            print(f"      AI dem: {check.get('count')} (mong doi {count})")
-            if check.get("found") and check.get("count") != count:
-                print(f"      [WARN] AI dem lech: {check.get('count')} != {count}")
+            count_tmpl_name = action_cfg.get("count_template")
+            if count_tmpl_name:
+                try:
+                    tmpl = self._load_reference(count_tmpl_name)
+                    check = self.vision.count_template(
+                        tmpl, threshold=action_cfg.get("count_threshold", 0.75))
+                    print(f"      Template dem: {check.get('count')} (mong doi {count}) - {check.get('message', '')}")
+                    if check.get("found") and check.get("count") != count:
+                        print(f"      [WARN] Dem lech: {check.get('count')} != {count}")
+                except Exception as e:
+                    print(f"      [WARN] Khong dem duoc: {e}")
+            else:
+                print("      [SKIP] verify_count: khong cung cap count_template (khong dung API)")
 
         self.used_photos["fingerprints"] = sorted(used)
         self._save_used_photos()
         print(f"      Da chon {len(picks)} anh (tong fingerprint da luu: {len(used)})")
         return {"ok": True, "picks": picks}
+
+    @staticmethod
+    def _all_used(skip_used_count, cols, rows):
+        """True khi da bo qua toan bo vi vi tri cu da duoc dung."""
+        return skip_used_count >= cols * rows
 
     def _screen_capture(self):
         if getattr(self, "_capture", None) is None:
@@ -248,30 +317,165 @@ class WorkflowRunner:
 
     def _run_back_until(self, step, step_index):
         action_cfg = step.get("action", {})
-        max_presses = action_cfg.get("max_presses", 8)
-        wait_each = action_cfg.get("wait_after_each", 1.5)
+        max_presses = int(action_cfg.get("max_presses", 8))
+        wait_each = float(action_cfg.get("wait_after_each", 1.5))
         back_cfg = action_cfg.get("back", {})
+
+        # Che do cu: click mot template cho toi khi KHONG con thay no.
+        template_name = step.get("template")
+        if template_name and action_cfg.get("mode") == "click_until_gone":
+            return self._run_click_until_gone(
+                step, step_index, template_name, max_presses, wait_each)
+
+        # Dieu kien dung ro rang: template can xuat hien, vi du 1x.
+        target_template = step.get("until_template")
         image_name = step.get("image")
-        reference = self._load_reference(image_name) if image_name else None
-        for i in range(max_presses):
-            if reference:
-                result = self.vision.verify_same(reference, step_index=step_index)
-                if result.get("same"):
-                    print(f"      Thay anh mau -> dung back")
-                    return {"ok": True, "back_presses": i}
+        reference_name = target_template or image_name
+        if not reference_name:
+            return {"ok": False, "back_presses": 0,
+                    "message": "Thieu 'until_template' hoac 'image' cho dieu kien dung"}
+        try:
+            reference = self._load_reference(reference_name)
+        except Exception as e:
+            return {"ok": False, "back_presses": 0,
+                    "message": f"Loi doc mau '{reference_name}': {e}"}
+
+        threshold = float(step.get(
+            "until_threshold", step.get("threshold", 0.8)))
+        check_timeout = float(step.get("check_timeout", 0.5))
+        retry_interval = float(step.get("retry_interval", 0.1))
+        scales = step.get("until_scales", step.get("scales"))
+
+        def find_target():
+            if target_template:
+                return self.vision.locate_template(
+                    reference,
+                    description=step.get("description", ""),
+                    step_index=step_index,
+                    timeout=check_timeout,
+                    retry_interval=retry_interval,
+                    threshold=threshold,
+                    scales=scales,
+                )
+            return self.vision.verify_same(reference, step_index=step_index)
+
+        def found(result):
+            return bool(result.get("found") if target_template
+                        else result.get("same"))
+
+        def score(result):
+            return result.get("score", result.get("confidence", 0))
+
+        # Kiem tra mot lan dau va mot lan sau click cuoi cung.
+        for clicks in range(max_presses + 1):
+            try:
+                result = find_target()
+            except Exception as e:
+                return {"ok": False, "back_presses": clicks,
+                        "message": f"Loi kiem tra '{reference_name}': {e}"}
+
+            if found(result):
+                print(f"      Tim thay '{reference_name}' (score {score(result)}) "
+                      f"-> da ve man hinh chinh sau {clicks} lan click Back")
+                return {"ok": True, "back_presses": clicks,
+                        "message": "Da tim thay man hinh dich"}
+
+            if clicks == max_presses:
+                print(f"      [FAIL] Khong thay '{reference_name}' sau "
+                      f"{max_presses} lan click Back")
+                return {"ok": False, "back_presses": max_presses,
+                        "message": f"Khong thay '{reference_name}' sau {max_presses} lan click Back"}
+
             if not self.dry_run:
                 if back_cfg.get("type") == "click_pct":
-                    px, py = back_cfg["point"]
-                    region = self.vision.region or {"left": 0, "top": 0, "width": 1368, "height": 912}
+                    point = back_cfg.get("point")
+                    if not isinstance(point, (list, tuple)) or len(point) != 2:
+                        return {"ok": False, "back_presses": clicks,
+                                "message": "Thieu hoac sai 'back.point'"}
+                    px, py = point
+                    region = getattr(self.vision, "region", None) or {
+                        "left": 0, "top": 0, "width": 1368, "height": 912
+                    }
                     bx = region["left"] + int(px * region["width"])
                     by = region["top"] + int(py * region["height"])
                     self.controller.click_at(bx, by)
                 else:
                     self.controller.press_key("back")
             else:
-                print(f"      [DRY-RUN] BACK #{i+1}")
+                print(f"      [DRY-RUN] BACK {clicks + 1}/{max_presses}")
+
+            print(f"      Click Back {clicks + 1}/{max_presses}; "
+                  f"cho {wait_each:g} giay roi kiem tra lai...")
             time.sleep(wait_each)
-        return {"ok": True, "back_presses": max_presses}
+
+        return {"ok": False, "back_presses": max_presses,
+                "message": "Khong tim thay dieu kien dung"}
+
+    def _run_click_until_gone(self, step, step_index, template_name,
+                              max_presses, wait_each):
+        """Click dau X (template) cho toi khi tim thay `until_template` tren man hinh.
+
+        Mac dinh: bam 8x (dau X) cho den khi thay 1x (tile Engine Speed Lyrics)
+        => man hinh da tro ve man hinh chinh AI Creation.
+        """
+        threshold = step.get("threshold", 0.8)
+        check_timeout = step.get("check_timeout", 2.0)
+        retry_interval = step.get("retry_interval", 0.5)
+        scales = step.get("scales")
+        until_name = step.get("until_template", "1x")
+        until_threshold = step.get("until_threshold", 0.75)
+        until_scales = step.get("until_scales")
+        try:
+            reference = self._load_reference(template_name)
+            until_reference = self._load_reference(until_name)
+        except Exception as e:
+            return {"ok": False, "message": f"Loi doc template: {e}"}
+
+        def find(ref, name, th, sc):
+            return self.vision.locate_template(
+                ref,
+                description=step.get("description", ""),
+                step_index=step_index,
+                timeout=check_timeout,
+                retry_interval=retry_interval,
+                threshold=th,
+                scales=sc,
+            )
+
+        clicks = 0
+        for i in range(max_presses):
+            # 1. Da ve man hinh chinh chua? (thay 1x)
+            goal = find(until_reference, until_name, until_threshold, until_scales)
+            if goal.get("found"):
+                print(f"      Tim thay '{until_name}' (score {goal.get('score')}) "
+                      f"-> da ve man hinh chinh sau {clicks} lan click X")
+                return {"ok": True, "clicks": clicks}
+            # 2. Chua ve -> tim dau X de bam
+            x_res = find(reference, template_name, threshold, scales)
+            if not x_res.get("found"):
+                print(f"      Khong thay '{template_name}' va cung khong thay "
+                      f"'{until_name}' -> dung o lan {i+1}")
+                return {"ok": False, "clicks": clicks,
+                        "message": f"Khong thay X hay {until_name} sau {clicks} lan click"}
+            clicks += 1
+            print(f"      Click X lan {i+1}/{max_presses} tai "
+                  f"({x_res['x']}, {x_res['y']}) score {x_res.get('score')}")
+            try:
+                if not self.dry_run:
+                    self.controller.click_at(x_res["x"], x_res["y"])
+                else:
+                    print(f"      [DRY-RUN] CLICK ({x_res['x']}, {x_res['y']})")
+            except Exception as e:
+                return {"ok": False, "message": f"Loi click: {e}"}
+            time.sleep(wait_each)
+        # Het luot: kiem tra lai lan cuoi
+        goal = find(until_reference, until_name, until_threshold, until_scales)
+        if goal.get("found"):
+            print(f"      Tim thay '{until_name}' sau {clicks} lan click X")
+            return {"ok": True, "clicks": clicks}
+        print(f"      [WARN] Click {clicks} lan van khong thay '{until_name}'")
+        return {"ok": False, "clicks": clicks,
+                "message": f"Click {clicks} lan van khong thay '{until_name}'"}
 
     def _run_basic_action(self, step, step_index):
         action_cfg = step.get("action", {})

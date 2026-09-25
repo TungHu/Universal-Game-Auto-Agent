@@ -224,28 +224,149 @@ class AIVision:
             }
         return {"found": False, "x": 0, "y": 0, "score": 0.0, "action": "none", "message": f"TIMEOUT {timeout}s - khong thay '{description}'"}
 
-    def verify_same(self, reference_image, step_index=0):
+    @staticmethod
+    def _match_template_best(img_gray, tmpl_gray, scales=None):
+        """Tim vi tri match tot nhat giua template va anh (multi-scale).
+
+        Returns:
+            (score, x, y, w, h) - toa do goc tren TRAI cua vung match tren anh.
+        """
+        import cv2
+        if scales is None:
+            # Template co the thay doi ca vi tri va kich thuoc khi vung chup
+            # doi do phan giai/DPI. Vi du 1x can scale ~1.7 tren anh 720x1600.
+            scales = [round(x, 3) for x in np.arange(0.4, 2.51, 0.05)]
+        ih, iw = img_gray.shape[:2]
+        best = (0.0, 0, 0, 0, 0)
+        for s in scales:
+            tw, th = int(tmpl_gray.shape[1] * s), int(tmpl_gray.shape[0] * s)
+            if tw < 8 or th < 8 or tw > iw or th > ih:
+                continue
+            interp = cv2.INTER_AREA if s < 1 else cv2.INTER_LINEAR
+            resized = cv2.resize(tmpl_gray, (tw, th), interpolation=interp)
+            res = cv2.matchTemplate(img_gray, resized, cv2.TM_CCOEFF_NORMED)
+            _, mx, _, loc = cv2.minMaxLoc(res)
+            if mx > best[0]:
+                best = (float(mx), loc[0], loc[1], tw, th)
+        return best
+
+    def locate_template(self, template_image, description="", step_index=0,
+                        timeout=25.0, retry_interval=1.0, threshold=0.75,
+                        fallback_click=None, scales=None):
+        """Tim nut/doi tuong bang template matching (OpenCV) - KHONG goi API.
+
+        Multi-scale (0.4 - 1.6) de khong phu thuoc do phan giai region.
+        Tra ve toa do pixel TUYET DOI (da cong region left/top).
+        """
+        import cv2
+        region = self.region if self.region else {"left": 0, "top": 0, "width": 1368, "height": 912}
+        region_left = region.get("left", 0)
+        region_top = region.get("top", 0)
+        if self.mock:
+            rw, rh = region.get("width", 1368), region.get("height", 912)
+            return {"found": True, "x": region_left + rw // 2, "y": region_top + rh // 2,
+                    "relative_x": rw // 2, "relative_y": rh // 2, "score": 0.9,
+                    "action": "click", "message": "mock template"}
+        tmpl_gray = cv2.cvtColor(np.array(template_image.convert("RGB")), cv2.COLOR_RGB2GRAY)
+        start_time = time.time()
+        last_best = 0.0
+        while time.time() - start_time < timeout:
+            try:
+                from core.capture import ScreenCapture
+                screenshot = ScreenCapture().capture_region(region)
+            except Exception as e:
+                return {"found": False, "x": 0, "y": 0, "score": 0.0, "action": "none",
+                        "message": f"Loi chup man hinh: {e}"}
+            img_gray = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2GRAY)
+            score, mx, my, mw, mh = self._match_template_best(img_gray, tmpl_gray, scales=scales)
+            last_best = max(last_best, score)
+            if score >= threshold:
+                rx = mx + mw // 2
+                ry = my + mh // 2
+                if self.debug:
+                    os.makedirs(self.debug_dir, exist_ok=True)
+                    marked = screenshot.copy()
+                    draw = ImageDraw.Draw(marked)
+                    draw.ellipse([rx - 8, ry - 8, rx + 8, ry + 8], outline="red", width=3)
+                    draw.ellipse([rx - 4, ry - 4, rx + 4, ry + 4], outline="yellow", width=2)
+                    marked.save(os.path.join(self.debug_dir, f"step_{step_index:02d}_found.jpg"), "JPEG")
+                return {"found": True, "x": region_left + rx, "y": region_top + ry,
+                        "relative_x": rx, "relative_y": ry, "score": round(score, 3),
+                        "action": "click",
+                        "message": f"template match {score:.2f} >= {threshold}"}
+            remaining = timeout - (time.time() - start_time)
+            if remaining > 0:
+                time.sleep(min(retry_interval, remaining))
+        if fallback_click and "point" in fallback_click:
+            px, py = fallback_click["point"]
+            rw = region.get("width", 1368)
+            rh = region.get("height", 912)
+            return {"found": False, "x": region_left + int(px * rw),
+                    "y": region_top + int(py * rh),
+                    "relative_x": int(px * rw), "relative_y": int(py * rh),
+                    "score": round(last_best, 3), "action": "fallback_click",
+                    "message": f"TIMEOUT {timeout}s (best {last_best:.2f}) -> fallback {px*100:.0f}%, {py*100:.0f}%"}
+        return {"found": False, "x": 0, "y": 0, "score": round(last_best, 3),
+                "action": "none",
+                "message": f"TIMEOUT {timeout}s - khong thay template (best {last_best:.2f} < {threshold})"}
+
+    def count_template(self, template_image, threshold=0.75):
+        """Dem so vi tri xuat hien template tren man hinh - KHONG goi API."""
+        import cv2
+        if self.mock:
+            return {"count": 2, "found": True, "message": "mock"}
         try:
             from core.capture import ScreenCapture
-            capture = ScreenCapture()
             region = self.region if self.region else {"left": 0, "top": 0, "width": 1368, "height": 912}
-            screenshot = capture.capture_region(region)
+            screenshot = ScreenCapture().capture_region(region)
+        except Exception as e:
+            return {"count": 0, "found": False, "message": f"Loi chup: {e}"}
+        img_gray = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2GRAY)
+        tmpl_gray = cv2.cvtColor(np.array(template_image.convert("RGB")), cv2.COLOR_RGB2GRAY)
+        ih, iw = img_gray.shape[:2]
+        best_res, best_s, best_score = None, 1.0, 0.0
+        for s in [round(x, 3) for x in np.arange(0.4, 1.61, 0.04)]:
+            tw, th = int(tmpl_gray.shape[1] * s), int(tmpl_gray.shape[0] * s)
+            if tw < 8 or th < 8 or tw > iw or th > ih:
+                continue
+            resized = cv2.resize(tmpl_gray, (tw, th),
+                                 interpolation=cv2.INTER_AREA if s < 1 else cv2.INTER_LINEAR)
+            res = cv2.matchTemplate(img_gray, resized, cv2.TM_CCOEFF_NORMED)
+            _, mx, _, _ = cv2.minMaxLoc(res)
+            if mx > best_score:
+                best_score, best_res, best_s = mx, res, s
+        if best_res is None:
+            return {"count": 0, "found": False, "message": "template qua lon"}
+        binary = (best_res >= threshold).astype(np.uint8)
+        n, _ = cv2.connectedComponents(binary)
+        count = int(max(n - 1, 0))
+        return {"count": count, "found": True,
+                "message": f"dem {count} (score {best_score:.2f}, scale {best_s})"}
+
+    def verify_same(self, reference_image, step_index=0):
+        """So sanh man hinh hien tai voi anh mau bang template matching cuc bo.
+        KHONG goi API. Lay cac strip ngang cua anh mau, match multi-scale,
+        lay diem cao nhat - khong phu thuoc status bar/thanh dieu huong."""
+        import cv2
+        if self.mock:
+            return {"same": True, "confidence": 0.99, "message": "mock"}
+        try:
+            from core.capture import ScreenCapture
+            region = self.region if self.region else {"left": 0, "top": 0, "width": 1368, "height": 912}
+            screenshot = ScreenCapture().capture_region(region)
         except Exception as e:
             return {"same": False, "confidence": 0.0, "message": f"Loi chup man hinh: {e}"}
-        prompt = self._build_verify_prompt()
-        provider = self._get_ai_config()["provider"]
-        try:
-            ref_img, _ = self._prepare_image(reference_image.copy())
-            cur_img, _ = self._prepare_image(screenshot.copy())
-            reply = self._call_ai_vision(prompt, ref_img, cur_img, provider=provider)
-            if self.debug:
-                debug_dir = os.path.join(self.config.get("_game_dir", "."), "debug")
-                os.makedirs(debug_dir, exist_ok=True)
-                with open(os.path.join(debug_dir, f"verify_{step_index:02d}_reply.txt"), "w", encoding="utf-8") as f:
-                    f.write(reply)
-            return self._parse_verify_response(reply)
-        except Exception as e:
-            return {"same": False, "confidence": 0.0, "message": f"Loi AI verify: {e}"}
+        img_gray = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2GRAY)
+        ref_gray = cv2.cvtColor(np.array(reference_image.convert("RGB")), cv2.COLOR_RGB2GRAY)
+        h, w = ref_gray.shape[:2]
+        best = 0.0
+        for top_frac in (0.15, 0.30, 0.45, 0.60):
+            strip = ref_gray[int(h * top_frac):int(h * (top_frac + 0.25)), :]
+            score, _, _, _, _ = self._match_template_best(img_gray, strip)
+            best = max(best, score)
+        same = best >= 0.75
+        return {"same": same, "confidence": round(best, 3),
+                "message": f"strip-match {best:.2f} -> {'giong' if same else 'khac'}"}
 
     def _build_locate_prompt(self, description):
         return (

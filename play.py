@@ -420,8 +420,15 @@ def run_workflow(args):
     base_config["ai_provider"] = ai_cfg["provider"]
     base_config["model"] = ai_cfg["model"]
 
-    print(f"\n  [CFG] AI Provider: {ai_cfg['provider']}")
-    print(f"  [CFG] Model: {ai_cfg['model'] or '(mac dinh theo provider)'}")
+    needs_ai = any(
+        (s.get("action") or {}).get("type", "ai") == "ai" and not s.get("template")
+        for s in steps
+    )
+    if needs_ai:
+        print(f"\n  [CFG] AI Provider: {ai_cfg['provider']}")
+        print(f"  [CFG] Model: {ai_cfg['model'] or '(mac dinh theo provider)'}")
+    else:
+        print("\n  [CFG] Vision: template matching (khong can API key)")
     if args.api_key:
         print(f"  [CFG] API key: nhan tu --api-key")
     if args.mock_ai:

@@ -29,3 +29,8 @@ workflows/*/config.json
 workflows/*/region.json
 workflows/*/used_photos.json
 workflows/*/debug/
+
+# Bo thao tac: trang thai sinh ra khi chay
+input/*/used_photos.json
+input/*/debug/
+input/*/.device.json

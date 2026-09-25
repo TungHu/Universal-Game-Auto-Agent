@@ -74,6 +74,20 @@ def main():
     parser.add_argument("--api-key", default=None,
                         help="API key ghi de cho provider hien tai (khong luu vao file)")
 
+    # --- Quan ly BO thao tac (input sets) ---
+    parser.add_argument("--set", dest="set_name",
+                        help="Ten bo thao tac trong input/ (vi du: capcut_cu)")
+    parser.add_argument("--list-sets", action="store_true",
+                        help="Liet ke cac bo trong input/")
+    parser.add_argument("--new-set", dest="new_set",
+                        help="Tao bo moi trong input/ (copy tu --from-set neu co)")
+    parser.add_argument("--from-set", dest="from_set",
+                        help="Bo mau de tao --new-set (copy steps.json)")
+    parser.add_argument("--seed-images", dest="seed_images",
+                        help="Copy anh tu input_picture/ vao bo nay")
+    parser.add_argument("--check", action="store_true",
+                        help="Kiem tra bo: thieu anh, anh thua, steps sai")
+
     args = parser.parse_args()
 
     print_banner()
@@ -81,6 +95,56 @@ def main():
     if args.list:
         list_workflows()
         sys.exit(0)
+
+    # --- Xu ly cac lenh quan ly BO thao tac ---
+    from core import sets
+
+    if args.list_sets:
+        print("  [SETS] Danh sach bo thao tac")
+        sets.print_list()
+        sys.exit(0)
+
+    if args.new_set:
+        wf_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "workflows", f"workflow_{args.workflow}") \
+            if args.workflow else None
+        try:
+            target = sets.create_set(args.new_set, from_set=args.from_set,
+                                     workflow_dir=wf_dir)
+        except sets.SetError as e:
+            print(f"  [FAIL] {e}")
+            sys.exit(1)
+        print(f"  [OK] Da tao bo '{args.new_set}'")
+        print(f"       Thu muc: {target}")
+        print(f"       Anh:     {sets.images_dir(args.new_set)}")
+        print()
+        print("  Buoc tiep theo:")
+        print(f"    1. Bo anh vao {sets.images_dir(args.new_set)}")
+        print(f"       Dat ten: 1.jpg, 1x.png, 2.jpg, 2x.png ...")
+        print(f"    2. Sua mo ta buoc trong {sets.steps_path(args.new_set)}")
+        print(f"    3. Kiem tra: python play.py --workflow {args.workflow} "
+              f"--set {args.new_set} --check")
+        print()
+        sys.exit(0)
+
+    if args.seed_images:
+        try:
+            n = sets.seed_images(args.seed_images)
+        except sets.SetError as e:
+            print(f"  [FAIL] {e}")
+            sys.exit(1)
+        print(f"  [OK] Da copy {n} anh vao "
+              f"{sets.images_dir(args.seed_images)}")
+        print()
+        sys.exit(0)
+
+    if args.check:
+        if not args.set_name:
+            print("  [FAIL] --check can chi dinh --set <ten bo>")
+            sys.exit(1)
+        res = sets.check_set(args.set_name)
+        sets.print_check(args.set_name, res)
+        sys.exit(0 if res["ok"] else 1)
 
     if args.workflow:
         run_workflow(args)
@@ -274,13 +338,34 @@ def run_workflow(args):
         print(f"  -> Kiem tra thu muc: {workflow_dir}")
         sys.exit(1)
 
-    steps_path = os.path.join(workflow_dir, "steps.json")
-    if not os.path.exists(steps_path):
-        print(f"Khong tim thay {steps_path}")
+    steps_path_file = os.path.join(workflow_dir, "steps.json")
+    if not os.path.exists(steps_path_file):
+        print(f"Khong tim thay {steps_path_file}")
         sys.exit(1)
 
-    with open(steps_path, "r", encoding="utf-8-sig") as f:
+    with open(steps_path_file, "r", encoding="utf-8-sig") as f:
         workflow_config = json.load(f)
+
+    # --- Chon BO thao tac (input set) ---
+    from core import sets
+    active_set = args.set_name
+    if active_set:
+        if not sets.set_exists(active_set):
+            print(f"[FAIL] Khong co bo '{active_set}' trong input/")
+            print(f"  -> Xem danh sach: python play.py --list-sets")
+            sys.exit(1)
+        try:
+            set_config = sets.load_steps(active_set)
+        except sets.SetError as e:
+            print(f"[FAIL] {e}")
+            sys.exit(1)
+        # Ghi de steps + cac truong cap nhat theo bo
+        for key in ("steps", "repeat", "ai", "name"):
+            if key in set_config:
+                workflow_config[key] = set_config[key]
+        print(f"  [SET] Dung bo thao tac: {active_set}")
+    else:
+        print("  [SET] Khong chon --set -> dung steps.json cua workflow")
 
     print("=" * 60)
     wf_name = workflow_config.get("name", args.workflow)
@@ -384,7 +469,13 @@ def run_workflow(args):
     # Merge workflow config
     base_config["steps"] = steps
     base_config["repeat"] = repeat
-    base_config["image_dir"] = workflow_config.get("image_dir", "input_picture")
+
+    # Thu muc anh: uu tien images/ cua bo, sau do bo khac, cuoi cung input_picture/
+    if active_set:
+        base_config["image_dir"] = [d for d in sets.search_dirs(active_set)
+                                    if os.path.isdir(d)]
+    else:
+        base_config["image_dir"] = workflow_config.get("image_dir", "input_picture")
 
     # --- Ghep ai theo thu tu uu tien thap -> cao ---
     # 1) config.json (ai_provider/model)  2) steps.json ai block

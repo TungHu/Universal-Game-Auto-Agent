@@ -33,18 +33,25 @@ class WorkflowRunner:
             json.dump(self.used_photos, f, indent=2, ensure_ascii=False)
 
     def _get_image_path(self, image_name):
-        image_dir = self.config.get("image_dir", "input_picture")
-        if os.path.isabs(image_dir):
-            path = os.path.join(image_dir, image_name)
-        else:
-            base = self.config.get("_base_dir", os.path.dirname(os.path.abspath(__file__)))
-            path = os.path.join(base, image_dir, image_name)
-        # Ten khong co extension (vi du "1", "1x") -> tu tim file hinh
-        if not os.path.splitext(path)[1]:
-            for ext in (".png", ".jpg", ".jpeg", ".webp"):
-                if os.path.exists(path + ext):
-                    return path + ext
-        return path
+        # image_dir co the la 1 duong dan hoac danh sach thu muc (thu tu uu tien)
+        image_dirs = self.config.get("image_dir", "input_picture")
+        if isinstance(image_dirs, str):
+            image_dirs = [image_dirs]
+        base = self.config.get("_base_dir", os.path.dirname(os.path.abspath(__file__)))
+
+        for image_dir in image_dirs:
+            if os.path.isabs(image_dir):
+                path = os.path.join(image_dir, image_name)
+            else:
+                path = os.path.join(base, image_dir, image_name)
+            # Ten khong co extension (vi du "1", "1x") -> tu tim file hinh
+            if not os.path.splitext(path)[1]:
+                for ext in (".png", ".jpg", ".jpeg", ".webp"):
+                    if os.path.exists(path + ext):
+                        return path + ext
+            elif os.path.exists(path):
+                return path
+        return os.path.join(base, image_dirs[0], image_name)
 
     def _load_reference(self, image_name):
         path = self._get_image_path(image_name)

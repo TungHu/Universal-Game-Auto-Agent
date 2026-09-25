@@ -1,6 +1,6 @@
 {
   "name": "capcut_auto",
-  "image_dir": "input_picture",
+  "image_dir": "images",
   "repeat": 0,
   "ai": {
     "provider": "gemini",
@@ -13,7 +13,7 @@
     {
       "image": "1",
       "template": "1x",
-      "description": "BO MOI: man hinh chinh AI Creation"
+      "description": "Man hinh chinh AI Creation. Bam vao tile Engine Speed Lyrics (ben phai, hang 2)."
     },
     {
       "image": "2",
@@ -74,37 +74,28 @@
     {
       "image": "6",
       "template": "6x",
-      "description": "Sheet Save Video tu duoi hien len. Bam nut vang Export to Phone."
+      "description": "Sheet Save Video. Bam nut Save xam ben trai.",
+      "fallback_click": { "point": [0.11, 0.90] },
+      "wait_after": 2.0
     },
     {
       "image": "7",
-      "template": "7x",
-      "description": "Dialog Exported. Bam nut CANCEL.",
-      "timeout": 120.0,
-      "fallback_click": {
-        "point": [
-          0.5,
-          0.82
-        ]
-      }
-    },
-    {
-      "image": "1x",
       "until_template": "1x",
-      "description": "Bam nut Back o goc duoi ben phai cho toi khi thay duoc 1x (ve man hinh chinh).",
+      "description": "Cho man hinh Saved to phone album hien len, roi bam Back cho toi khi thay duoc 1x (ve man hinh chinh).",
       "threshold": 0.75,
       "check_timeout": 0.5,
-      "retry_interval": 0.1,
+      "retry_interval": 0.5,
       "action": {
         "type": "back_until",
-        "max_presses": 3,
-        "wait_after_each": 0.5,
+        "wait_for": "7x",
+        "wait_for_timeout": 40.0,
+        "wait_for_interval": 1.0,
+        "settle": 1.5,
+        "max_presses": 4,
+        "wait_after_each": 2.0,
         "back": {
           "type": "click_pct",
-          "point": [
-            0.771,
-            0.972
-          ]
+          "point": [0.771, 0.972]
         }
       }
     }

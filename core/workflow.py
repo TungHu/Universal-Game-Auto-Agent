@@ -353,6 +353,41 @@ class WorkflowRunner:
         retry_interval = float(step.get("retry_interval", 0.1))
         scales = step.get("until_scales", step.get("scales"))
 
+        # CHO MAN HINH TRUOC: doi mot man hinh nao do xuat hien truoc khi
+        # bat dau bam Back. VD: cho "7x" (Saved to phone album) hien len,
+        # roi moi bam Back cho toi khi thay "1x".
+        wait_for_name = action_cfg.get("wait_for")
+        if wait_for_name:
+            wait_ref = self._load_reference(wait_for_name)
+            wait_threshold = float(action_cfg.get("wait_for_threshold", 0.85))
+            wait_timeout = float(action_cfg.get("wait_for_timeout", 30.0))
+            wait_interval = float(action_cfg.get("wait_for_interval", 1.0))
+            deadline = time.time() + wait_timeout
+            seen = False
+            while time.time() < deadline:
+                res = self.vision.locate_template(
+                    wait_ref,
+                    description=step.get("description", ""),
+                    step_index=step_index,
+                    timeout=0.1,
+                    retry_interval=0.1,
+                    threshold=wait_threshold,
+                )
+                if res.get("found"):
+                    print(f"      Da thay '{wait_for_name}' "
+                          f"(score {res.get('score'):.3f}) -> bat dau bam Back")
+                    seen = True
+                    break
+                print(f"      Cho '{wait_for_name}' xuat hien "
+                      f"(con {deadline - time.time():.0f}s)...")
+                time.sleep(wait_interval)
+            if not seen:
+                return {"ok": False, "back_presses": 0,
+                        "message": f"Khong thay '{wait_for_name}' sau "
+                                   f"{wait_timeout:g} giay"}
+            # Cho man hinh on dinh truoc khi bam
+            time.sleep(float(action_cfg.get("settle", 1.0)))
+
         def find_target():
             if target_template:
                 return self.vision.locate_template(

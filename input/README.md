@@ -57,6 +57,36 @@ Vay bo moi chi can put anh **cac buoc khac biet** vao, phan con lai
 tu len lay tu bo cu. Muon bo nao doc lap hon 100%, bo het
 `input_picture/` vao `.gitignore` cua rieng bo do.
 
+## Cac truong dac biet cua action `back_until`
+
+| Truong | Y nghia |
+|---|---|
+| `until_template` | Dieu kien dung: bam Back cho toi khi thay template nay |
+| `wait_for` | **Cho man hinh nay xuat hien truoc**, roi moi bat dau bam Back |
+| `wait_for_timeout` | Cho toi da bao lau (giay) |
+| `settle` | Nghi them sau khi man hinh da xuat hien (giay) |
+| `max_presses` | Toi da bam Back toi da |
+| `wait_after_each` | Nghi giua cac lan bam (giay) |
+| `back.point` | Toa do phan tram de bam nut Back |
+
+Vi du: cho man hinh "Saved to phone album" hien len, roi bam Back toi khi
+ve man hinh chinh:
+
+```json
+{
+  "until_template": "1x",
+  "action": {
+    "type": "back_until",
+    "wait_for": "7x",
+    "wait_for_timeout": 40.0,
+    "settle": 1.5,
+    "max_presses": 4,
+    "wait_after_each": 2.0,
+    "back": { "type": "click_pct", "point": [0.771, 0.972] }
+  }
+}
+```
+
 ## Luu y
 
 - `steps.json` cua bo **la ban sao rieng**, sua tu do, khong sua bo khac.

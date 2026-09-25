@@ -197,6 +197,13 @@ def collect_used_images(steps):
             name = step.get(key)
             if isinstance(name, str) and name and name not in needed:
                 needed.append(name)
+        # Anh dung cho action back_until: wait_for
+        action = step.get("action") or {}
+        if isinstance(action, dict):
+            for key in ("wait_for", "template", "target"):
+                name = action.get(key)
+                if isinstance(name, str) and name and name not in needed:
+                    needed.append(name)
     return needed
 
 
